@@ -91,15 +91,11 @@ jobs:
           sudo apt-get install -y cabal-install ghc haskell-stack
           cabal update
 
-      - name: Set up Android NDK
-        uses: android-actions/setup-android@v3
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
         with:
-          sdk-platform: "platforms;android-34"
-
-      - name: Install NDK
-        run: |
-          yes | sdkmanager --install "ndk;27.0.8482524"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.8482524" >> $GITHUB_ENV
+          ndk-version: r27c
+          add-to-path: true
 
       - name: Unpack source
         run: |

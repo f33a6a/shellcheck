@@ -1,10 +1,50 @@
 name: Build ShellCheck for Android
 
-on:
-  workflow_dispatch:
+# Run when manually triggered
+on: workflow_dispatch
 
 jobs:
-  build:
+  package_source:
+    name: Package Source Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-mark manual ghc
+          sudo apt-get install cabal-install
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Deduce tags
+        run: |
+          mkdir source
+          echo "latest" > source/tags
+          if tag=$(git describe --exact-match --tags)
+          then
+            echo "stable" >> source/tags
+            echo "$tag" >> source/tags
+          fi
+          cat source/tags
+
+      - name: Package Source
+        run: |
+          grep "stable" source/tags || ./setgitversion
+          cabal sdist
+          mv dist-newstyle/sdist/*.tar.gz source/source.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: source/
+
+  build_android:
+    name: Build Android
+    needs: package_source
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -30,34 +70,41 @@ jobs:
             lib_dir: x86
             android_abi: x86
             clang_target: i686-linux-android21-clang
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-        
-      - name: Install build dependencies
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cabal-install ghc haskell-stack protobuf-compiler cmake build-essential autoconf automake libtool
-          
-      - name: Set up Haskell
-        uses: haskell-actions/setup@v2
+          sudo apt-get install -y cabal-install ghc haskell-stack
+          cabal update
+
+      - name: Set up Android NDK
+        uses: android-actions/setup-android@v3
         with:
-          ghc-version: 'latest'
-          cabal-version: 'latest'
-          
-      - name: Install Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27c
-          add-to-path: true
-          
+          sdk-platform: "platforms;android-34"
+
+      - name: Install NDK
+        run: |
+          yes | sdkmanager --install "ndk;27.0.8482524"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.8482524" >> $GITHUB_ENV
+
+      - name: Unpack source
+        run: |
+          mkdir -p build
+          cd source
+          tar xvf source.tar.gz --strip-components=1 -C ../build
+
       - name: Build ShellCheck for Android
         run: |
+          cd build
           echo "Building ShellCheck for ${{ matrix.arch }}"
           
           # Setup environment variables
-          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           export CC=${{ matrix.clang_target }}
           export CXX=${{ matrix.clang_target }}++
@@ -65,21 +112,75 @@ jobs:
           export RANLIB=llvm-ranlib
           export STRIP=llvm-strip
           
-          # Build ShellCheck using Stack
-          stack setup
-          stack build --ghc-options="-optl-static -optl-pthread" --flag ShellCheck:static
+          # Configure cabal for cross-compilation
+          mkdir -p $HOME/.cabal
+          cat > $HOME/.cabal/config <<EOF
+          -- Cross-compilation settings for Android
+          extra-include-dirs: $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+          extra-lib-dirs: $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.target }}/21
+          EOF
+          
+          # Build ShellCheck
+          cabal configure --ghc-options="-optl-static -optl-pthread" --flags="static"
+          cabal build
           
           # Create output directory
-          mkdir -p dist/android/${{ matrix.lib_dir }}
+          mkdir -p ../bin/android/${{ matrix.lib_dir }}
           
-          # Copy the binary to the output directory
-          cp $(stack path --local-install-root)/bin/shellcheck dist/android/${{ matrix.lib_dir }}/
+          # Copy the binary
+          cp dist-newstyle/build/*/shellcheck-*/build/shellcheck/shellcheck ../bin/android/${{ matrix.lib_dir }}/
           
-          # Strip the binary to reduce size
-          $STRIP dist/android/${{ matrix.lib_dir }}/shellcheck
-          
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+          # Strip the binary
+          $STRIP ../bin/android/${{ matrix.lib_dir }}/shellcheck
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: shellcheck-android-${{ matrix.arch }}
-          path: dist/android/${{ matrix.lib_dir }}/shellcheck
+          name: android.${{ matrix.arch }}.bin
+          path: bin/android/${{ matrix.lib_dir }}/
+
+  package_android_binaries:
+    name: Package Android Binaries
+    needs: build_android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Work around GitHub permissions bug
+        run: chmod +x android.*.bin/*/shellcheck
+
+      - name: Package Android binaries
+        run: |
+          export TAGS="$(cat source/tags)"
+          mkdir -p deploy_android
+          cp -r android.*.bin/* deploy_android
+          cd deploy_android
+          
+          # Create zip archives for each architecture
+          for arch in aarch64 armv7 x86_64 x86; do
+            case $arch in
+              aarch64) dir="arm64-v8a" ;;
+              armv7) dir="armv7" ;;
+              x86_64) dir="x86_64" ;;
+              x86) dir="x86" ;;
+            esac
+            
+            if [ -d "$dir" ]; then
+              mkdir -p "$arch"
+              cp -r "$dir"/* "$arch"/
+              (cd "$arch" && zip -r "../shellcheck-android-$arch.zip" .)
+            fi
+          done
+          
+          # Create a combined zip with all architectures
+          zip -r "shellcheck-android-all.zip" aarch64 armv7 x86_64 x86 -x "*.zip"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-binaries
+          path: deploy_android/*.zip

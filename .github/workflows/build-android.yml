@@ -79,7 +79,7 @@ jobs:
           $STRIP dist/android/${{ matrix.lib_dir }}/shellcheck
           
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: shellcheck-android-${{ matrix.arch }}
           path: dist/android/${{ matrix.lib_dir }}/shellcheck

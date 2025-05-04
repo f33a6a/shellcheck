@@ -125,7 +125,7 @@ jobs:
           EOF
           
           # Build ShellCheck
-          cabal configure --ghc-options="-optl-static -optl-pthread" --flags="static"
+          cabal configure --ghc-options="-fPIC -optl-static -optl-pthread" --flags="static"
           cabal build
           
           # Create output directory

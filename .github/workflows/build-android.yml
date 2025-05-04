@@ -127,7 +127,7 @@ jobs:
           
           # Build ShellCheck
           cabal configure \
-            --ghc-options="-fPIC -optl-static -optl-pthread" \
+            --ghc-options="-fPIC -optl-static -optl-pthread -Wno-error" \
             --configure-option=CFLAGS="-fPIC" \
             --configure-option=LDFLAGS="-fPIC" \
             --flags="static"

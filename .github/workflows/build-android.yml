@@ -1,0 +1,85 @@
+name: Build ShellCheck for Android
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [aarch64, armv7, x86_64, x86]
+        include:
+          - arch: aarch64
+            target: aarch64-linux-android
+            lib_dir: arm64-v8a
+            android_abi: arm64-v8a
+            clang_target: aarch64-linux-android21-clang
+          - arch: armv7
+            target: armv7-linux-androideabi
+            lib_dir: armv7
+            android_abi: armeabi-v7a
+            clang_target: armv7a-linux-androideabi21-clang
+          - arch: x86_64
+            target: x86_64-linux-android
+            lib_dir: x86_64
+            android_abi: x86_64
+            clang_target: x86_64-linux-android21-clang
+          - arch: x86
+            target: i686-linux-android
+            lib_dir: x86
+            android_abi: x86
+            clang_target: i686-linux-android21-clang
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cabal-install ghc haskell-stack protobuf-compiler cmake build-essential autoconf automake libtool
+          
+      - name: Set up Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: 'latest'
+          cabal-version: 'latest'
+          
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: true
+          
+      - name: Build ShellCheck for Android
+        run: |
+          echo "Building ShellCheck for ${{ matrix.arch }}"
+          
+          # Setup environment variables
+          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
+          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          export CC=${{ matrix.clang_target }}
+          export CXX=${{ matrix.clang_target }}++
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          export STRIP=llvm-strip
+          
+          # Build ShellCheck using Stack
+          stack setup
+          stack build --ghc-options="-optl-static -optl-pthread" --flag ShellCheck:static
+          
+          # Create output directory
+          mkdir -p dist/android/${{ matrix.lib_dir }}
+          
+          # Copy the binary to the output directory
+          cp $(stack path --local-install-root)/bin/shellcheck dist/android/${{ matrix.lib_dir }}/
+          
+          # Strip the binary to reduce size
+          $STRIP dist/android/${{ matrix.lib_dir }}/shellcheck
+          
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: shellcheck-android-${{ matrix.arch }}
+          path: dist/android/${{ matrix.lib_dir }}/shellcheck

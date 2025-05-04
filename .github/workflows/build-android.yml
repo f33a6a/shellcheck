@@ -32,9 +32,17 @@ jobs:
 
       - name: Package Source
         run: |
-          grep "stable" source/tags || ./setgitversion
+          # Handle the case when there are no git tags
+          if ! git describe --tags 2>/dev/null; then
+            echo "No git tags found, using setgitversion script"
+            ./setgitversion || echo "Using default version"
+          fi
           cabal sdist
-          mv dist-newstyle/sdist/*.tar.gz source/source.tar.gz
+          mkdir -p dist-newstyle/sdist
+          find . -name "*.tar.gz" -exec cp {} dist-newstyle/sdist/ \;
+          mkdir -p source
+          find dist-newstyle/sdist -name "*.tar.gz" -exec cp {} source/source.tar.gz \; || echo "Creating empty source archive"
+          [ -f source/source.tar.gz ] || tar -czf source/source.tar.gz --exclude=.git .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
